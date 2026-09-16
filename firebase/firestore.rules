@@ -1,0 +1,148 @@
+rules_version = '2';
+
+// SafeLink Firestore security rules (v0).
+// Contract: docs/firestore-schema.md → "Security rules — intent".
+// Model: both clients talk to Firestore directly (no backend), so these rules
+// are the only server-side authorisation. Everything is deny-by-default.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isUser(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // Accounts without an e-mail claim (anonymous / phone-only) can never be
+    // guardians. Guard the claim before touching it so a missing `email`
+    // never turns into a rules evaluation error (which would deny anyway,
+    // but silently).
+    function hasEmail() {
+      return signedIn()
+        && ('email' in request.auth.token)
+        && request.auth.token.email is string
+        && request.auth.token.email != '';
+    }
+
+    // Emails are stored lower-case (schema convention); compare lower-cased.
+    function callerEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    // A guardian is anyone whose (lower-cased) auth e-mail appears in the
+    // alert's denormalised `contactEmails` list.
+    function isGuardianOf(alert) {
+      return hasEmail() && callerEmail() in alert.contactEmails;
+    }
+
+    function isOwnerOf(alert) {
+      return isUser(alert.ownerUid);
+    }
+
+    // ------------------------------------------------------------------
+    // users/{uid} + users/{uid}/contacts/** — owner only
+    // ------------------------------------------------------------------
+
+    match /users/{uid} {
+      allow read, write: if isUser(uid);
+
+      // Trusted contacts (up to 5). Guardians never read this list; they see
+      // the denormalised copy inside each alert instead.
+      match /contacts/{contactPath=**} {
+        allow read, write: if isUser(uid);
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // alerts/{alertId} — top-level so guardians can query across owners
+    // ------------------------------------------------------------------
+
+    match /alerts/{alertId} {
+
+      // Guardian patch: only these keys may change, and `status` may only
+      // stay as it is or move to "resolved" (never "cancelled" / "active").
+      function guardianPatch() {
+        let after = request.resource.data;
+        let before = resource.data;
+        let changed = after.diff(before).affectedKeys();
+        return changed.hasOnly(['acks', 'status', 'updatedAt', 'endedAt', 'endedBy'])
+          && (after.status == before.status || after.status == 'resolved');
+      }
+
+      // Read (get + list): the owner, or a listed guardian.
+      // Guardian list queries must filter `contactEmails array-contains <email>`
+      // with the exact lower-cased e-mail so the rule is provable per query.
+      allow read: if isOwnerOf(resource.data) || isGuardianOf(resource.data);
+
+      // Create: only the wearer, for herself, and only as a live alert.
+      // `createdAt` written with serverTimestamp() resolves to request.time here.
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.status == 'active'
+        && request.resource.data.contactEmails is list
+        && request.resource.data.createdAt is timestamp;
+
+      // Update: owner may change anything except who owns the alert;
+      // a guardian may only acknowledge / resolve (see guardianPatch).
+      allow update: if (isOwnerOf(resource.data)
+                        && request.resource.data.ownerUid == resource.data.ownerUid)
+                    || (isGuardianOf(resource.data) && guardianPatch());
+
+      // Nobody deletes alerts — they are the audit trail.
+      allow delete: if false;
+
+      // --------------------------------------------------------------
+      // alerts/{alertId}/locations/{locId} — the position trail
+      // --------------------------------------------------------------
+
+      match /locations/{locId} {
+        function parentAlert() {
+          return get(/databases/$(database)/documents/alerts/$(alertId)).data;
+        }
+
+        // Read: owner or guardian of the parent alert.
+        allow read: if isOwnerOf(parentAlert()) || isGuardianOf(parentAlert());
+
+        // Create: owner only (the app appends fixes). Immutable afterwards.
+        allow create: if isOwnerOf(parentAlert());
+        allow update, delete: if false;
+      }
+
+      // --------------------------------------------------------------
+      // alerts/{alertId}/events/{eventId} — the timeline
+      // --------------------------------------------------------------
+
+      match /events/{eventId} {
+        function parentAlert() {
+          return get(/databases/$(database)/documents/alerts/$(alertId)).data;
+        }
+
+        // Read: owner or guardian of the parent alert.
+        allow read: if isOwnerOf(parentAlert()) || isGuardianOf(parentAlert());
+
+        // Create: the owner may append any event; a guardian only the two
+        // events she can cause. Events are immutable once written.
+        allow create: if isOwnerOf(parentAlert())
+          || (isGuardianOf(parentAlert())
+              && request.resource.data.type in ['guardian_ack', 'resolved']);
+        allow update, delete: if false;
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // Everything else is denied (explicit, for readers of this file —
+    // Firestore already denies paths with no matching allow).
+    // ------------------------------------------------------------------
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
