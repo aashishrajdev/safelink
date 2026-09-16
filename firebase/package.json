@@ -1,0 +1,21 @@
+{
+  "name": "safelink-firebase",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SafeLink Firestore rules, indexes, hosting config and rules tests",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore --project demo-safelink \"node --test tests/firestore.rules.test.mjs\"",
+    "test:npx": "npx -y firebase-tools@latest emulators:exec --only firestore --project demo-safelink \"node --test tests/firestore.rules.test.mjs\"",
+    "emulators": "firebase emulators:start --project demo-safelink",
+    "deploy:firestore": "firebase deploy --only firestore",
+    "deploy:hosting": "firebase deploy --only hosting"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "firebase": "^12.19.0"
+  }
+}
