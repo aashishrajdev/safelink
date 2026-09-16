@@ -1,0 +1,44 @@
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local config / logs
+.env
+.env.*
+!.env.example
+.firebase/
+*-debug.log
+firebase-debug*.log
+firestore-debug*.log
+ui-debug*.log
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Flutter / Dart
+app/.dart_tool/
+app/.packages
+app/build/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/android/.gradle/
+app/android/local.properties
+app/android/key.properties
+app/ios/Pods/
+app/*.iml
+
+# Arduino
+firmware/**/build/
+*.bin
+*.elf
+*.map
+
+# Claude Code local files — never committed
+.claude/
